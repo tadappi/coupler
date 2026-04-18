@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>連結器 3D Viewer</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400&family=Space+Mono:wght@400;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0c;
+      --surface: #111114;
+      --border: #2a2a30;
+      --accent: #c8a97e;
+      --accent2: #7eb8c8;
+      --text: #e8e4dc;
+      --muted: #666672;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      overflow: hidden;
+    }
+
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+    }
+
+    canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* ── UI overlay ── */
+    .ui {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* top-left title */
+    .title-block {
+      position: absolute;
+      top: 32px;
+      left: 36px;
+      pointer-events: auto;
+    }
+    .title-block h1 {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 300;
+      font-size: clamp(18px, 2.5vw, 28px);
+      letter-spacing: 0.12em;
+      color: var(--text);
+      line-height: 1.1;
+    }
+    .title-block .sub {
+      font-size: 10px;
+      letter-spacing: 0.25em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-top: 6px;
+    }
+
+    /* decorative corner lines */
+    .corner {
+      position: absolute;
+      width: 40px; height: 40px;
+      pointer-events: none;
+    }
+    .corner.tl { top: 20px; left: 20px; border-top: 1px solid var(--accent); border-left: 1px solid var(--accent); }
+    .corner.tr { top: 20px; right: 20px; border-top: 1px solid var(--accent); border-right: 1px solid var(--accent); }
+    .corner.bl { bottom: 20px; left: 20px; border-bottom: 1px solid var(--accent); border-left: 1px solid var(--accent); }
+    .corner.br { bottom: 20px; right: 20px; border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent); }
+
+    /* controls hint */
+    .hint {
+      position: absolute;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 28px;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+    .hint span::before {
+      content: '○ ';
+      color: var(--accent);
+    }
+
+    /* right panel */
+    .panel {
+      position: absolute;
+      top: 50%;
+      right: 36px;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      pointer-events: auto;
+    }
+    .btn {
+      width: 40px; height: 40px;
+      border: 1px solid var(--border);
+      background: rgba(10,10,12,0.7);
+      color: var(--muted);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      transition: border-color 0.2s, color 0.2s, background 0.2s;
+      backdrop-filter: blur(8px);
+    }
+    .btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(200,169,126,0.08);
+    }
+    .btn.active {
+      border-color: var(--accent2);
+      color: var(--accent2);
+      background: rgba(126,184,200,0.12);
+    }
+
+    /* loading overlay */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      gap: 24px;
+      transition: opacity 0.6s;
+    }
+    #loading.fade { opacity: 0; pointer-events: none; }
+    .loader-text {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 300;
+      font-size: 13px;
+      letter-spacing: 0.3em;
+      color: var(--muted);
+    }
+    .loader-bar {
+      width: 160px;
+      height: 1px;
+      background: var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+    .loader-bar::after {
+      content: '';
+      position: absolute;
+      left: -60%;
+      top: 0; bottom: 0;
+      width: 60%;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: sweep 1.2s ease-in-out infinite;
+    }
+    @keyframes sweep {
+      to { left: 110%; }
+    }
+
+    /* error */
+    #error-msg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      z-index: 200;
+      text-align: center;
+      padding: 32px;
+    }
+    #error-msg.show { display: flex; }
+    #error-msg strong { color: #c87e7e; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="loader-text">モデルを読み込み中</div>
+  <div class="loader-bar"></div>
+</div>
+
+<div id="error-msg">
+  <strong>モデルの読み込みに失敗しました</strong>
+  <span id="error-detail"></span>
+  <span style="margin-top:8px; font-size:10px; letter-spacing:.1em;">GLBファイルと同じディレクトリにこのHTMLを配置してください</span>
+</div>
+
+<div id="canvas-container"></div>
+
+<div class="ui">
+  <div class="corner tl"></div>
+  <div class="corner tr"></div>
+  <div class="corner bl"></div>
+  <div class="corner br"></div>
+
+  <div class="title-block">
+    <h1>連結器</h1>
+    <div class="sub">3D Model Viewer</div>
+  </div>
+
+  <div class="panel">
+    <button class="btn" id="btn-auto" title="自動回転">↻</button>
+    <button class="btn" id="btn-wire" title="ワイヤーフレーム">⬡</button>
+    <button class="btn" id="btn-reset" title="リセット">⊙</button>
+  </div>
+
+  <div class="hint">
+    <span>ドラッグで回転</span>
+    <span>スクロールでズーム</span>
+    <span>右ドラッグで移動</span>
+  </div>
+</div>
+
+<!-- Three.js r128 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script>
+(function () {
+  // ── Scene setup ──────────────────────────────────────────
+  const container = document.getElementById('canvas-container');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.2;
+  container.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a0c);
+  scene.fog = new THREE.FogExp2(0x0a0a0c, 0.035);
+
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 1000);
+  camera.position.set(0, 0, 3);
+
+  // ── Lighting ──────────────────────────────────────────────
+  const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+  scene.add(ambient);
+
+  const keyLight = new THREE.DirectionalLight(0xfff5e0, 2.0);
+  keyLight.position.set(3, 5, 3);
+  keyLight.castShadow = true;
+  scene.add(keyLight);
+
+  const fillLight = new THREE.DirectionalLight(0x7eb8c8, 0.8);
+  fillLight.position.set(-3, 2, -2);
+  scene.add(fillLight);
+
+  const rimLight = new THREE.DirectionalLight(0xc8a97e, 0.6);
+  rimLight.position.set(0, -3, -4);
+  scene.add(rimLight);
+
+  // ── Grid (floor) ─────────────────────────────────────────
+  const grid = new THREE.GridHelper(20, 40, 0x2a2a30, 0x1a1a20);
+  grid.position.y = -1.5;
+  scene.add(grid);
+
+  // ── Orbit controls (manual implementation) ───────────────
+  let isDragging = false, isRightDrag = false;
+  let prevX = 0, prevY = 0;
+  let spherical = { theta: 0.3, phi: Math.PI / 2.8, radius: 3 };
+  let target = new THREE.Vector3(0, 0, 0);
+  let autoRotate = true;
+  let wireframe = false;
+  let model = null;
+  let originalMaterials = [];
+
+  function updateCamera() {
+    const sin = Math.sin(spherical.phi);
+    camera.position.set(
+      target.x + spherical.radius * sin * Math.sin(spherical.theta),
+      target.y + spherical.radius * Math.cos(spherical.phi),
+      target.z + spherical.radius * sin * Math.cos(spherical.theta)
+    );
+    camera.lookAt(target);
+  }
+
+  const dom = renderer.domElement;
+
+  dom.addEventListener('mousedown', e => {
+    isDragging = true;
+    isRightDrag = e.button === 2;
+    prevX = e.clientX; prevY = e.clientY;
+    autoRotate = false;
+    document.getElementById('btn-auto').classList.remove('active');
+  });
+  window.addEventListener('mouseup', () => { isDragging = false; });
+  window.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const dx = (e.clientX - prevX) * 0.005;
+    const dy = (e.clientY - prevY) * 0.005;
+    if (isRightDrag) {
+      const right = new THREE.Vector3();
+      const up = new THREE.Vector3();
+      camera.getWorldDirection(right);
+      right.cross(camera.up).normalize().multiplyScalar(-dx * spherical.radius * 0.3);
+      up.copy(camera.up).normalize().multiplyScalar(dy * spherical.radius * 0.3);
+      target.add(right).add(up);
+    } else {
+      spherical.theta -= dx;
+      spherical.phi = Math.max(0.05, Math.min(Math.PI - 0.05, spherical.phi - dy));
+    }
+    prevX = e.clientX; prevY = e.clientY;
+  });
+
+  dom.addEventListener('wheel', e => {
+    spherical.radius = Math.max(0.3, Math.min(30, spherical.radius + e.deltaY * 0.005));
+    e.preventDefault();
+  }, { passive: false });
+
+  dom.addEventListener('contextmenu', e => e.preventDefault());
+
+  // touch
+  let touches = [];
+  dom.addEventListener('touchstart', e => { touches = Array.from(e.touches); autoRotate = false; });
+  dom.addEventListener('touchmove', e => {
+    if (e.touches.length === 1) {
+      const dx = (e.touches[0].clientX - touches[0].clientX) * 0.005;
+      const dy = (e.touches[0].clientY - touches[0].clientY) * 0.005;
+      spherical.theta -= dx;
+      spherical.phi = Math.max(0.05, Math.min(Math.PI - 0.05, spherical.phi - dy));
+    } else if (e.touches.length === 2) {
+      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      const prevDist = Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+      spherical.radius = Math.max(0.3, Math.min(30, spherical.radius - (dist - prevDist) * 0.01));
+    }
+    touches = Array.from(e.touches);
+    e.preventDefault();
+  }, { passive: false });
+
+  // ── Load GLB ──────────────────────────────────────────────
+  // Dynamically load GLTFLoader (not in base r128 bundle)
+  const loaderScript = document.createElement('script');
+  // Use inline GLTFLoader implementation via fetch workaround:
+  // We import from a CDN that hosts the addon
+  loaderScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'; // already loaded
+
+  // GLTFLoader inline (simplified fetch-based)
+  async function loadGLTF(url) {
+    // Use THREE.FileLoader + GLTFLoader from jsDelivr
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+      s.onload = () => {
+        const loader = new THREE.GLTFLoader();
+        loader.load(url, resolve, undefined, reject);
+      };
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  const MODEL_URL = '連結器.glb';
+
+  loadGLTF(MODEL_URL).then(gltf => {
+    model = gltf.scene;
+
+    // Center & scale
+    const box = new THREE.Box3().setFromObject(model);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 2.0 / maxDim;
+    model.scale.setScalar(scale);
+    model.position.sub(center.multiplyScalar(scale));
+
+    // Enable shadows + store materials
+    model.traverse(child => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        originalMaterials.push({ mesh: child, mat: child.material });
+      }
+    });
+
+    // Adjust grid
+    const newBox = new THREE.Box3().setFromObject(model);
+    grid.position.y = newBox.min.y - 0.05;
+
+    scene.add(model);
+
+    // Hide loading
+    const loading = document.getElementById('loading');
+    loading.classList.add('fade');
+    setTimeout(() => loading.style.display = 'none', 700);
+
+  }).catch(err => {
+    console.error(err);
+    document.getElementById('loading').style.display = 'none';
+    const errEl = document.getElementById('error-msg');
+    errEl.classList.add('show');
+    document.getElementById('error-detail').textContent = err.message || String(err);
+  });
+
+  // ── Buttons ───────────────────────────────────────────────
+  const btnAuto = document.getElementById('btn-auto');
+  const btnWire = document.getElementById('btn-wire');
+  const btnReset = document.getElementById('btn-reset');
+
+  btnAuto.addEventListener('click', () => {
+    autoRotate = !autoRotate;
+    btnAuto.classList.toggle('active', autoRotate);
+  });
+
+  btnWire.addEventListener('click', () => {
+    wireframe = !wireframe;
+    btnWire.classList.toggle('active', wireframe);
+    if (!model) return;
+    model.traverse(child => {
+      if (child.isMesh) {
+        if (wireframe) {
+          child.material = new THREE.MeshBasicMaterial({ color: 0x7eb8c8, wireframe: true });
+        } else {
+          const orig = originalMaterials.find(o => o.mesh === child);
+          if (orig) child.material = orig.mat;
+        }
+      }
+    });
+  });
+
+  btnReset.addEventListener('click', () => {
+    spherical = { theta: 0.3, phi: Math.PI / 2.8, radius: 3 };
+    target.set(0, 0, 0);
+    autoRotate = true;
+    btnAuto.classList.add('active');
+  });
+
+  // ── Resize ────────────────────────────────────────────────
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // ── Render loop ───────────────────────────────────────────
+  const clock = new THREE.Clock();
+  function animate() {
+    requestAnimationFrame(animate);
+    const delta = clock.getDelta();
+    if (autoRotate) spherical.theta += delta * 0.4;
+    updateCamera();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // default auto-rotate active style
+  btnAuto.classList.add('active');
+
+})();
+</script>
+</body>
+</html>
